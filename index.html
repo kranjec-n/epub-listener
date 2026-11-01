@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Listener">
+<meta name="theme-color" content="#3446c9">
+<title>EPUB Listener</title>
+<script src="jszip.min.js"></script>
+<style>
+:root {
+  /* Layout: header + scrolling reading column + fixed player dock at the bottom */
+  --paper: #eef0f4;
+  --card: #ffffff;
+  --ink: #1b2130;
+  --muted: #5b6477;
+  --line: #d9dde6;
+  --accent: #3446c9;
+  --accent-ink: #ffffff;
+  --mark: #dfe3ff;
+  --font-read: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+  --font-ui: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #11141b; --card: #191d27; --ink: #e5e8ef; --muted: #98a1b3;
+    --line: #2a3040; --accent: #8e9cff; --accent-ink: #10131a; --mark: #2b3466;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #11141b; --card: #191d27; --ink: #e5e8ef; --muted: #98a1b3;
+  --line: #2a3040; --accent: #8e9cff; --accent-ink: #10131a; --mark: #2b3466;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--paper); color: var(--ink);
+  font-family: var(--font-ui); font-size: 15px;
+  display: flex; flex-direction: column;
+}
+button, select, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px; padding-top: max(12px, env(safe-area-inset-top)); padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); border-bottom: 1px solid var(--line); background: var(--card);
+}
+.book-meta { flex: 1; min-width: 0; }
+.book-title { font-family: var(--font-read); font-weight: 600; font-size: 1.05rem; margin: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.book-author { color: var(--muted); font-size: .85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.btn {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--card); border-radius: 8px;
+  padding: 8px 12px; font-weight: 500;
+}
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+
+main { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.reader { max-width: 40rem; margin: 0 auto; padding: 28px 20px 40px; }
+.reader .chapter-heading { font-family: var(--font-ui); color: var(--muted); font-size: .8rem; line-height: 1.4;
+  letter-spacing: .06em; text-transform: uppercase; margin: 0 0 18px; }
+.dock > * { max-width: 44rem; margin-left: auto; margin-right: auto; }
+.reader p, .reader h2 { font-family: var(--font-read); margin: 0 0 1em; }
+.reader p { font-size: 1.12rem; line-height: 1.7; }
+.reader h2 { font-size: 1.35rem; line-height: 1.3; font-weight: 600; text-wrap: balance; margin-top: .4em; }
+.s { cursor: pointer; border-radius: 3px; transition: background-color .15s; }
+.s:hover { background: color-mix(in srgb, var(--mark) 55%, transparent); }
+.s.on { background: var(--mark); box-shadow: 0 0 0 2px var(--mark); }
+
+.welcome { max-width: 30rem; margin: 8vh auto 0; padding: 0 20px; display: grid; gap: 16px; }
+.welcome h1 { font-family: var(--font-read); font-weight: 600; font-size: 1.8rem; margin: 0; text-wrap: balance; }
+.welcome p { color: var(--muted); line-height: 1.55; margin: 0; }
+.drop {
+  border: 2px dashed var(--line); border-radius: 14px; padding: 28px 20px; text-align: center;
+  display: grid; gap: 12px; justify-items: center; background: var(--card);
+}
+.drop.over { border-color: var(--accent); }
+.drop small { color: var(--muted); }
+.linkish { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; text-decoration: underline; }
+.error { color: #b42318; background: color-mix(in srgb, #b42318 10%, var(--card)); border-radius: 8px; padding: 10px 12px; }
+:root[data-theme="dark"] .error { color: #ff9b8f; }
+
+.dock { background: var(--card); border-top: 1px solid var(--line); padding: 8px 16px 12px;
+  padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+.dock[aria-disabled="true"] { opacity: .5; pointer-events: none; }
+.progress-row { display: flex; align-items: center; gap: 10px; font-size: .8rem; color: var(--muted);
+  font-variant-numeric: tabular-nums; }
+.bar { flex: 1; height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.bar > div { height: 100%; width: 0; background: var(--accent); }
+.chapter-row { display: flex; gap: 8px; margin: 8px 0 6px; }
+.chapter-row select { flex: 1; min-width: 0; }
+select { border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 7px 8px; }
+.controls { display: flex; justify-content: center; align-items: center; gap: 6px; }
+.icon-btn { width: 44px; height: 44px; border-radius: 50%; border: none; background: none; cursor: pointer;
+  display: grid; place-items: center; }
+.icon-btn:hover { background: var(--paper); }
+.icon-btn svg { width: 22px; height: 22px; fill: currentColor; }
+.play { width: 58px; height: 58px; background: var(--accent); color: var(--accent-ink); }
+.play:hover { background: var(--accent); filter: brightness(1.08); }
+.play svg { width: 28px; height: 28px; }
+.settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px 16px;
+  padding-top: 10px; margin-top: 8px; border-top: 1px solid var(--line); }
+.settings[hidden] { display: none; }
+.field { display: grid; gap: 4px; font-size: .8rem; color: var(--muted); }
+.field select, .field input { color: var(--ink); width: 100%; }
+.field input[type=range] { accent-color: var(--accent); }
+.hint { grid-column: 1 / -1; font-size: .8rem; color: var(--muted); line-height: 1.45; margin: 0; }
+.drag-veil { position: fixed; inset: 0; background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border: 3px dashed var(--accent); display: none; place-items: center; font-weight: 600; z-index: 10; }
+body.dragging .drag-veil { display: grid; }
+@media (prefers-reduced-motion: reduce) { .s { transition: none; } }
+</style>
+</head>
+<body>
+<div class="drag-veil" aria-hidden="true">Drop the EPUB to open it</div>
+<header>
+  <div class="book-meta">
+    <p class="book-title" id="bookTitle">EPUB Listener</p>
+    <div class="book-author" id="bookAuthor">Open a book to start listening</div>
+  </div>
+  <button class="btn" id="openBtn" type="button">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 4h6l2 2h8v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/></svg>
+    Open
+  </button>
+  <input type="file" id="fileInput" accept=".epub,application/epub+zip" hidden>
+</header>
+
+<main id="main">
+  <section class="welcome" id="welcome">
+    <h1>Turn any EPUB into an audiobook</h1>
+    <p>Pick a book and your device's voices read it aloud, sentence by sentence, with the text following along. Tap any sentence to jump there.</p>
+    <div class="drop" id="drop">
+      <button class="btn primary" id="openBig" type="button">Choose an EPUB file</button>
+      <small>or drag it here</small>
+    </div>
+    <p>No book handy? <button class="linkish" id="sampleBtn" type="button">Try a sample chapter</button></p>
+    <p style="font-size:.85rem">The book never leaves your device, and the last one you opened is kept here so it reopens next time, even offline. Books with DRM (most store-bought ones) cannot be opened.</p>
+    <div id="errorBox" class="error" hidden></div>
+  </section>
+  <article class="reader" id="reader" hidden></article>
+</main>
+
+<footer class="dock" id="dock" aria-disabled="true">
+  <div class="error" id="notice" role="status" hidden style="margin-bottom:8px;font-size:.85rem;line-height:1.45"></div>
+  <div style="display:flex;justify-content:flex-end;margin-bottom:4px"><button class="linkish" id="testBtn" type="button" style="font-size:.8rem">Test sound</button></div>
+  <div class="progress-row">
+    <span id="chapPos">–</span>
+    <div class="bar" aria-hidden="true"><div id="barFill"></div></div>
+    <span id="pct">0%</span>
+  </div>
+  <div class="chapter-row">
+    <label for="chapterSel" class="sr" hidden>Chapter</label>
+    <select id="chapterSel" aria-label="Chapter"></select>
+    <button class="btn" id="settingsBtn" type="button" aria-expanded="false" aria-controls="settings">Voice &amp; speed</button>
+  </div>
+  <div class="controls">
+    <button class="icon-btn" id="prevCh" type="button" aria-label="Previous chapter" title="Previous chapter">
+      <svg viewBox="0 0 24 24"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg></button>
+    <button class="icon-btn" id="prevS" type="button" aria-label="Previous sentence" title="Previous sentence">
+      <svg viewBox="0 0 24 24"><path d="M11 6v12L2.5 12zM21 6v12l-8.5-6z"/></svg></button>
+    <button class="icon-btn play" id="playBtn" type="button" aria-label="Play">
+      <svg viewBox="0 0 24 24" id="playIcon"><path d="M8 5v14l11-7z"/></svg></button>
+    <button class="icon-btn" id="nextS" type="button" aria-label="Next sentence" title="Next sentence">
+      <svg viewBox="0 0 24 24"><path d="M13 6v12l8.5-6zM3 6v12l8.5-6z"/></svg></button>
+    <button class="icon-btn" id="nextCh" type="button" aria-label="Next chapter" title="Next chapter">
+      <svg viewBox="0 0 24 24"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg></button>
+  </div>
+  <div class="settings" id="settings" hidden>
+    <label class="field" for="voiceSel">Voice
+      <select id="voiceSel"></select></label>
+    <label class="field" for="rate">Speed <span id="rateOut">1.0×</span>
+      <input type="range" id="rate" min="0.5" max="2" step="0.1" value="1"></label>
+    <label class="field" for="sleepSel">Sleep timer <span id="sleepOut"></span>
+      <select id="sleepSel">
+        <option value="0">Off</option>
+        <option value="10">10 minutes</option>
+        <option value="20">20 minutes</option>
+        <option value="30">30 minutes</option>
+        <option value="60">60 minutes</option>
+        <option value="chapter">End of chapter</option>
+      </select></label>
+    <p class="hint" id="voiceHint"></p>
+  </div>
+</footer>
+
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const synth = window.speechSynthesis;
+  const MAX_CHUNK = 220;
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  const store = {
+    get(k) { try { return JSON.parse(localStorage.getItem("epubl:" + k)); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem("epubl:" + k, JSON.stringify(v)); } catch {} }
+  };
+
+  let book = null;          // {title, author, lang, chapters:[{title, paras:[{h, sents}]}], key}
+  let pos = { c: 0, p: 0, s: 0 };
+  let playing = false;
+  let token = 0;
+  let voices = [];
+  let rate = store.get("rate") || 1;
+  let sleepTimer = null, sleepEnd = 0, sleepAtChapterEnd = false, sleepTick = null;
+  let wakeLock = null;
+  let chStart = [], total = 0;
+
+  /* ---------- text helpers ---------- */
+  function chunkLong(s) {
+    const out = [];
+    let rest = s;
+    while (rest.length > MAX_CHUNK) {
+      const win = rest.slice(0, MAX_CHUNK);
+      let cut = Math.max(win.lastIndexOf(", "), win.lastIndexOf("; "), win.lastIndexOf(": "), win.lastIndexOf(" – "), win.lastIndexOf(" — "));
+      if (cut < MAX_CHUNK * 0.4) cut = win.lastIndexOf(" ");
+      if (cut <= 0) cut = MAX_CHUNK - 1;
+      out.push(rest.slice(0, cut + 1).trim());
+      rest = rest.slice(cut + 1).trim();
+    }
+    if (rest) out.push(rest);
+    return out;
+  }
+  function splitSentences(text, lang) {
+    let parts = null;
+    if (window.Intl && Intl.Segmenter) {
+      try {
+        const seg = new Intl.Segmenter(lang || undefined, { granularity: "sentence" });
+        parts = Array.from(seg.segment(text), (x) => x.segment.trim()).filter(Boolean);
+      } catch { parts = null; }
+    }
+    if (!parts) {
+      parts = (text.match(/[^.!?…]+[.!?…]+["'”’»)\]]*\s*|[^.!?…]+$/g) || [text]).map((x) => x.trim()).filter(Boolean);
+    }
+    const out = [];
+    for (const p of parts) p.length > MAX_CHUNK ? out.push(...chunkLong(p)) : out.push(p);
+    return out;
+  }
+
+  /* ---------- EPUB parsing ---------- */
+  const BLOCK = new Set(["p","div","h1","h2","h3","h4","h5","h6","li","blockquote","section","article","pre","td","th","dt","dd","figcaption","header","footer","aside","tr","ul","ol","dl","table","body","hr"]);
+  const SKIP = new Set(["script","style","head","title","svg","math","rt","rp","noscript","img","audio","video"]);
+  const HEAD = new Set(["h1","h2","h3","h4","h5","h6"]);
+
+  function extractBlocks(root) {
+    const out = [];
+    let buf = "", cur = "body";
+    const flush = () => {
+      const t = buf.replace(/\s+/g, " ").trim();
+      if (t && /[\p{L}\p{N}]/u.test(t)) out.push({ text: t, h: HEAD.has(cur) });
+      buf = "";
+    };
+    (function walk(node) {
+      for (const ch of node.childNodes) {
+        if (ch.nodeType === 3) buf += ch.nodeValue;
+        else if (ch.nodeType === 1) {
+          const n = (ch.localName || "").toLowerCase();
+          if (SKIP.has(n)) continue;
+          if (n === "br") { buf += " "; continue; }
+          if (BLOCK.has(n)) { flush(); const prev = cur; cur = n; walk(ch); flush(); cur = prev; }
+          else walk(ch);
+        }
+      }
+    })(root);
+    flush();
+    return out;
+  }
+  function resolvePath(baseFile, href) {
+    const base = "http://x/" + baseFile;
+    try { return decodeURIComponent(new URL(href, base).pathname.slice(1)); }
+    catch { return href; }
+  }
+  function parseXml(text, type) {
+    let doc = new DOMParser().parseFromString(text, type || "application/xml");
+    if (doc.getElementsByTagName("parsererror").length) {
+      doc = new DOMParser().parseFromString(text, "text/html");
+    }
+    return doc;
+  }
+  function firstText(doc, name) {
+    const el = doc.getElementsByTagNameNS("*", name)[0];
+    return el ? el.textContent.trim() : "";
+  }
+  function zipFile(zip, path) {
+    return zip.file(path) || zip.file(Object.keys(zip.files).find((k) => k.toLowerCase() === path.toLowerCase()) || "\u0000");
+  }
+
+  async function parseEpub(file) {
+    if (typeof JSZip === "undefined") throw new Error("The EPUB reader library didn't load. Check your connection and reload the page.");
+    let zip;
+    try { zip = await JSZip.loadAsync(file); }
+    catch { throw new Error("This file isn't a valid EPUB (it couldn't be unzipped)."); }
+
+    const enc = zipFile(zip, "META-INF/encryption.xml");
+    if (enc) {
+      const encText = await enc.async("text");
+      if (/URI="[^"]+\.x?html?"/i.test(encText)) throw new Error("This book is DRM-protected, so its text can't be read. Try a DRM-free EPUB.");
+    }
+    const cont = zipFile(zip, "META-INF/container.xml");
+    if (!cont) throw new Error("This EPUB is missing its table of contents file (META-INF/container.xml).");
+    const contDoc = parseXml(await cont.async("text"));
+    const rootfile = contDoc.getElementsByTagNameNS("*", "rootfile")[0];
+    const opfPath = rootfile && rootfile.getAttribute("full-path");
+    const opfEntry = opfPath && zipFile(zip, opfPath);
+    if (!opfEntry) throw new Error("Couldn't find the book's package file inside the EPUB.");
+    const opf = parseXml(await opfEntry.async("text"));
+
+    const title = firstText(opf, "title") || file.name.replace(/\.epub$/i, "");
+    const author = firstText(opf, "creator");
+    const lang = firstText(opf, "language") || "";
+
+    const manifest = {};
+    for (const it of opf.getElementsByTagNameNS("*", "item")) {
+      manifest[it.getAttribute("id")] = {
+        path: resolvePath(opfPath, it.getAttribute("href")),
+        type: it.getAttribute("media-type") || "",
+        props: it.getAttribute("properties") || ""
+      };
+    }
+    const spineEl = opf.getElementsByTagNameNS("*", "spine")[0];
+    const spine = Array.from(opf.getElementsByTagNameNS("*", "itemref"))
+      .map((r) => manifest[r.getAttribute("idref")]).filter(Boolean);
+
+    // Table of contents labels: path -> first label
+    const tocLabels = {};
+    try {
+      const navItem = Object.values(manifest).find((m) => /\bnav\b/.test(m.props));
+      if (navItem && zipFile(zip, navItem.path)) {
+        const nav = parseXml(await zipFile(zip, navItem.path).async("text"), "application/xhtml+xml");
+        const navs = Array.from(nav.getElementsByTagName("nav"));
+        const toc = navs.find((n) => /toc/.test(n.getAttribute("epub:type") || n.getAttributeNS("http://www.idpf.org/2007/ops", "type") || "")) || navs[0];
+        if (toc) for (const a of toc.getElementsByTagName("a")) {
+          const href = a.getAttribute("href"); if (!href) continue;
+          const p = resolvePath(navItem.path, href.split("#")[0]);
+          const label = a.textContent.replace(/\s+/g, " ").trim();
+          if (label && !tocLabels[p]) tocLabels[p] = label;
+        }
+      }
+      const ncxId = spineEl && spineEl.getAttribute("toc");
+      const ncxItem = (ncxId && manifest[ncxId]) || Object.values(manifest).find((m) => m.type === "application/x-dtbncx+xml");
+      if (ncxItem && zipFile(zip, ncxItem.path) && !Object.keys(tocLabels).length) {
+        const ncx = parseXml(await zipFile(zip, ncxItem.path).async("text"));
+        for (const np of ncx.getElementsByTagNameNS("*", "navPoint")) {
+          const lab = np.getElementsByTagNameNS("*", "text")[0];
+          const src = np.getElementsByTagNameNS("*", "content")[0];
+          if (!lab || !src) continue;
+          const p = resolvePath(ncxItem.path, (src.getAttribute("src") || "").split("#")[0]);
+          const label = lab.textContent.replace(/\s+/g, " ").trim();
+          if (label && !tocLabels[p]) tocLabels[p] = label;
+        }
+      }
+    } catch { /* TOC is optional */ }
+
+    const chapters = [];
+    let n = 0;
+    for (const item of spine) {
+      if (!/html|xml/.test(item.type)) continue;
+      const entry = zipFile(zip, item.path);
+      if (!entry) continue;
+      const doc = parseXml(await entry.async("text"), "application/xhtml+xml");
+      const body = doc.getElementsByTagName("body")[0] || doc.documentElement;
+      const blocks = extractBlocks(body);
+      if (!blocks.length) continue;
+      n++;
+      const heading = blocks.find((b) => b.h);
+      const label = tocLabels[item.path] || (heading && heading.text.slice(0, 80)) || "Section " + n;
+      chapters.push({
+        title: label,
+        paras: blocks.map((b) => ({ h: b.h, sents: splitSentences(b.text, lang) }))
+      });
+    }
+    if (!chapters.length) throw new Error("No readable text was found in this EPUB. It may contain only images (like a comic or scanned book).");
+    return { title, author, lang, chapters };
+  }
+
+  /* ---------- sample ---------- */
+  function sampleBook() {
+    const raw = [
+      { title: "Chapter I. Down the Rabbit-Hole", paras: [
+        "Chapter I. Down the Rabbit-Hole",
+        "Alice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to do: once or twice she had peeped into the book her sister was reading, but it had no pictures or conversations in it, ‘and what is the use of a book,’ thought Alice ‘without pictures or conversations?’",
+        "So she was considering in her own mind (as well as she could, for the hot day made her feel very sleepy and stupid), whether the pleasure of making a daisy-chain would be worth the trouble of getting up and picking the daisies, when suddenly a White Rabbit with pink eyes ran close by her.",
+        "There was nothing so very remarkable in that; nor did Alice think it so very much out of the way to hear the Rabbit say to itself, ‘Oh dear! Oh dear! I shall be late!’ (when she thought it over afterwards, it occurred to her that she ought to have wondered at this, but at the time it all seemed quite natural); but when the Rabbit actually took a watch out of its waistcoat-pocket, and looked at it, and then hurried on, Alice started to her feet, for it flashed across her mind that she had never before seen a rabbit with either a waistcoat-pocket, or a watch to take out of it, and burning with curiosity, she ran across the field after it, and fortunately was just in time to see it pop down a large rabbit-hole under the hedge.",
+        "In another moment down went Alice after it, never once considering how in the world she was to get out again."
+      ]},
+      { title: "Chapter II. The Pool of Tears", paras: [
+        "Chapter II. The Pool of Tears",
+        "‘Curiouser and curiouser!’ cried Alice (she was so much surprised, that for the moment she quite forgot how to speak good English); ‘now I’m opening out like the largest telescope that ever was! Good-bye, feet!’ (for when she looked down at her feet, they seemed to be almost out of sight, they were getting so far off)."
+      ]}
+    ];
+    return {
+      title: "Alice’s Adventures in Wonderland (sample)", author: "Lewis Carroll", lang: "en",
+      chapters: raw.map((c) => ({ title: c.title, paras: c.paras.map((t, i) => ({ h: i === 0, sents: splitSentences(t, "en") })) }))
+    };
+  }
+
+  /* ---------- book loading & rendering ---------- */
+  function loadBook(b) {
+    stop();
+    book = b;
+    chStart = []; total = 0;
+    for (const ch of b.chapters) {
+      chStart.push(total);
+      let off = 0;
+      ch.pStart = ch.paras.map((p) => { const o = off; off += p.sents.length; return o; });
+      ch.count = off;
+      total += off;
+    }
+    book.key = "pos:" + b.title + ":" + total;
+    $("bookTitle").textContent = b.title;
+    $("bookAuthor").textContent = b.author || " ";
+    document.title = b.title + " · EPUB Listener";
+    const sel = $("chapterSel");
+    sel.innerHTML = "";
+    b.chapters.forEach((c, i) => {
+      const o = document.createElement("option");
+      o.value = i; o.textContent = (i + 1) + ". " + c.title;
+      sel.appendChild(o);
+    });
+    const saved = store.get(book.key);
+    pos = { c: 0, p: 0, s: 0 };
+    if (saved && b.chapters[saved.c] && b.chapters[saved.c].paras[saved.p] && b.chapters[saved.c].paras[saved.p].sents[saved.s] != null) pos = saved;
+    $("welcome").hidden = true;
+    $("reader").hidden = false;
+    $("dock").setAttribute("aria-disabled", "false");
+    renderChapter();
+    highlight(true);
+    populateVoices();
+  }
+
+  function renderChapter() {
+    const ch = book.chapters[pos.c];
+    const r = $("reader");
+    r.innerHTML = "";
+    const lab = document.createElement("p");
+    lab.className = "chapter-heading";
+    lab.textContent = "Chapter " + (pos.c + 1) + " of " + book.chapters.length;
+    r.appendChild(lab);
+    const frag = document.createDocumentFragment();
+    ch.paras.forEach((para, pi) => {
+      const el = document.createElement(para.h ? "h2" : "p");
+      para.sents.forEach((s, si) => {
+        const sp = document.createElement("span");
+        sp.className = "s"; sp.dataset.p = pi; sp.dataset.s = si;
+        sp.textContent = s;
+        el.appendChild(sp);
+        if (si < para.sents.length - 1) el.appendChild(document.createTextNode(" "));
+      });
+      frag.appendChild(el);
+    });
+    r.appendChild(frag);
+    $("chapterSel").value = pos.c;
+    $("main").scrollTop = 0;
+  }
+
+  let lastOn = null;
+  function highlight(force) {
+    if (lastOn) lastOn.classList.remove("on");
+    const el = $("reader").querySelector('.s[data-p="' + pos.p + '"][data-s="' + pos.s + '"]');
+    lastOn = el;
+    if (el) {
+      el.classList.add("on");
+      const m = $("main").getBoundingClientRect(), r = el.getBoundingClientRect();
+      if (force || r.top < m.top + 40 || r.bottom > m.bottom - 40) {
+        el.scrollIntoView({ block: "center", behavior: reduceMotion || force ? "auto" : "smooth" });
+      }
+    }
+    const ch = book.chapters[pos.c];
+    const done = chStart[pos.c] + ch.pStart[pos.p] + pos.s;
+    const pct = total ? Math.floor((done / total) * 100) : 0;
+    $("barFill").style.width = pct + "%";
+    $("pct").textContent = pct + "%";
+    $("chapPos").textContent = "Ch. " + (pos.c + 1) + "/" + book.chapters.length;
+    store.set(book.key, pos);
+  }
+
+  /* ---------- navigation ---------- */
+  function step(dir) {
+    const chs = book.chapters;
+    let { c, p, s } = pos;
+    s += dir;
+    while (true) {
+      const para = chs[c].paras[p];
+      if (s >= 0 && s < para.sents.length) break;
+      if (dir > 0) {
+        p++; s = 0;
+        if (p >= chs[c].paras.length) {
+          if (c + 1 >= chs.length) return false;
+          c++; p = 0;
+        }
+      } else {
+        p--;
+        if (p < 0) {
+          if (c === 0) return false;
+          c--; p = chs[c].paras.length - 1;
+        }
+        s = chs[c].paras[p].sents.length - 1;
+      }
+    }
+    const changed = c !== pos.c;
+    pos = { c, p, s };
+    if (changed) renderChapter();
+    return changed ? "chapter" : true;
+  }
+  function goChapter(c) {
+    if (!book || c < 0 || c >= book.chapters.length) return;
+    pos = { c, p: 0, s: 0 };
+    renderChapter();
+    highlight(true);
+    if (playing) restart();
+  }
+
+  /* ---------- speech ---------- */
+  function currentVoice() {
+    const v = $("voiceSel").value;
+    return voices.find((x) => x.voiceURI === v) || null;
+  }
+  function speakCurrent() {
+    const t = ++token;
+    const text = book.chapters[pos.c].paras[pos.p].sents[pos.s];
+    const u = new SpeechSynthesisUtterance(text);
+    const v = currentVoice();
+    if (v) { u.voice = v; u.lang = v.lang; } else if (book.lang) u.lang = book.lang;
+    u.rate = rate;
+    const advance = () => {
+      if (t !== token || !playing) return;
+      const r = step(1);
+      if (!r) { stop(); return; }
+      if (r === "chapter" && sleepAtChapterEnd) { clearSleep(); stop(); highlight(true); return; }
+      highlight(r === "chapter");
+      speakCurrent();
+    };
+    let started = false;
+    u.onstart = () => { started = true; spokeOnce = true; showNotice(""); };
+    setTimeout(() => {
+      if (!started && !spokeOnce && t === token && playing) {
+        showNotice("No sound is coming out. If you opened this inside the Claude app, open the link in Chrome or Safari instead. On iPhone, also check that the silent switch is off and the volume is up.");
+      }
+    }, 3500);
+    u.onend = advance;
+    u.onerror = (e) => {
+      if (t !== token) return;
+      if (e.error === "interrupted" || e.error === "canceled") return;
+      if (e.error === "not-allowed") { stop(); return; }
+      advance();
+    };
+    highlight();
+    synth.speak(u);
+  }
+  function play() {
+    if (!book) return;
+    if (!synth) { showVoiceHint("This browser can't speak text. Try Chrome, Edge or Safari."); return; }
+    playing = true;
+    if (synth.speaking || synth.pending) synth.cancel();
+    try { synth.resume(); } catch {}
+    speakCurrent();
+    setPlayIcon();
+    requestWake();
+  }
+  function stop() {
+    playing = false;
+    token++;
+    if (synth) synth.cancel();
+    setPlayIcon();
+    releaseWake();
+  }
+  function restart() { if (playing) { token++; synth.cancel(); setTimeout(() => { if (playing) speakCurrent(); }, 80); } }
+  let spokeOnce = false;
+  function showNotice(t) { const n = $("notice"); n.textContent = t; n.hidden = !t; }
+  setTimeout(() => {
+    if (!synth) showNotice("This browser can't read text aloud. Open the link in Chrome or Safari.");
+    else if (!synth.getVoices().length) showNotice("No voices were found here. If you opened this inside the Claude app, open the link in Chrome or Safari instead.");
+  }, 2000);
+  function toggle() { playing ? stop() : play(); }
+  function setPlayIcon() {
+    $("playIcon").innerHTML = playing ? '<path d="M7 5h4v14H7zM13 5h4v14h-4z"/>' : '<path d="M8 5v14l11-7z"/>';
+    $("playBtn").setAttribute("aria-label", playing ? "Pause" : "Play");
+  }
+
+  async function requestWake() {
+    try { if ("wakeLock" in navigator && !wakeLock) { wakeLock = await navigator.wakeLock.request("screen"); wakeLock.addEventListener("release", () => { wakeLock = null; }); } } catch { wakeLock = null; }
+  }
+  function releaseWake() { try { if (wakeLock) wakeLock.release(); } catch {} wakeLock = null; }
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && playing) requestWake(); });
+
+  /* ---------- voices ---------- */
+  function langPrefix(l) { return (l || "").toLowerCase().split(/[-_]/)[0]; }
+  function populateVoices() {
+    if (!synth) { showVoiceHint("This browser can't speak text. Try Chrome, Edge or Safari."); return; }
+    voices = synth.getVoices();
+    if (voices.length && !playing) showNotice("");
+    const sel = $("voiceSel");
+    const want = langPrefix(book ? book.lang : "");
+    const match = voices.filter((v) => want && langPrefix(v.lang) === want);
+    const other = voices.filter((v) => !match.includes(v)).sort((a, b) => a.lang.localeCompare(b.lang) || a.name.localeCompare(b.name));
+    sel.innerHTML = "";
+    const def = document.createElement("option");
+    def.value = ""; def.textContent = "Device default";
+    sel.appendChild(def);
+    const addGroup = (label, list) => {
+      if (!list.length) return;
+      const g = document.createElement("optgroup"); g.label = label;
+      for (const v of list) { const o = document.createElement("option"); o.value = v.voiceURI; o.textContent = v.name + " (" + v.lang + ")"; g.appendChild(o); }
+      sel.appendChild(g);
+    };
+    addGroup("Book language", match);
+    addGroup(match.length ? "Other voices" : "All voices", other);
+    const saved = store.get("voice:" + want);
+    if (saved && voices.some((v) => v.voiceURI === saved)) sel.value = saved;
+    else sel.value = ""; // device default + book language; avoids picking a listed-but-not-downloaded voice
+    if (book && want && !match.length && voices.length) {
+      showVoiceHint("This book is in “" + book.lang + "”, but your device has no voice for that language. Install one in your system's text-to-speech settings, then reload this page.");
+    } else showVoiceHint("");
+  }
+  function showVoiceHint(t) { $("voiceHint").textContent = t; $("voiceHint").hidden = !t; }
+  if (synth) synth.addEventListener ? synth.addEventListener("voiceschanged", populateVoices) : (synth.onvoiceschanged = populateVoices);
+
+  /* ---------- sleep timer ---------- */
+  function clearSleep() {
+    clearTimeout(sleepTimer); clearInterval(sleepTick);
+    sleepTimer = sleepTick = null; sleepAtChapterEnd = false;
+    $("sleepSel").value = "0"; $("sleepOut").textContent = "";
+  }
+  $("sleepSel").addEventListener("change", (e) => {
+    const v = e.target.value;
+    clearTimeout(sleepTimer); clearInterval(sleepTick); sleepAtChapterEnd = false; $("sleepOut").textContent = "";
+    if (v === "chapter") { sleepAtChapterEnd = true; $("sleepOut").textContent = "· on"; return; }
+    const mins = +v;
+    if (!mins) return;
+    sleepEnd = Date.now() + mins * 60000;
+    sleepTimer = setTimeout(() => { stop(); clearSleep(); }, mins * 60000);
+    const tick = () => { $("sleepOut").textContent = "· " + Math.max(1, Math.ceil((sleepEnd - Date.now()) / 60000)) + " min left"; };
+    tick(); sleepTick = setInterval(tick, 20000);
+  });
+
+  /* ---------- wiring ---------- */
+  function showError(msg) { const b = $("errorBox"); b.textContent = msg; b.hidden = false; }
+  async function openFile(file) {
+    if (!file) return;
+    $("errorBox").hidden = true;
+    const prevTitle = $("bookAuthor").textContent;
+    $("bookAuthor").textContent = "Opening " + file.name + "…";
+    try { loadBook(await parseEpub(file)); saveLastBook(file); }
+    catch (err) {
+      const msg = err.message || "This file couldn't be opened.";
+      $("bookAuthor").textContent = book ? (book.author || " ") : prevTitle;
+      if (book) alertInline(msg); else showError(msg);
+    }
+  }
+  function alertInline(msg) {
+    const r = $("reader");
+    const d = document.createElement("div"); d.className = "error"; d.textContent = msg;
+    r.prepend(d); setTimeout(() => d.remove(), 6000);
+  }
+  const pick = () => $("fileInput").click();
+  $("openBtn").addEventListener("click", pick);
+  $("openBig").addEventListener("click", pick);
+  $("fileInput").addEventListener("change", (e) => { openFile(e.target.files[0]); e.target.value = ""; });
+  $("sampleBtn").addEventListener("click", () => loadBook(sampleBook()));
+
+  let dragDepth = 0;
+  window.addEventListener("dragenter", (e) => { e.preventDefault(); dragDepth++; document.body.classList.add("dragging"); });
+  window.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove("dragging"); } });
+  window.addEventListener("dragover", (e) => e.preventDefault());
+  window.addEventListener("drop", (e) => {
+    e.preventDefault(); dragDepth = 0; document.body.classList.remove("dragging");
+    const f = e.dataTransfer && e.dataTransfer.files[0]; if (f) openFile(f);
+  });
+
+  $("playBtn").addEventListener("click", toggle);
+  $("testBtn").addEventListener("click", () => {
+    if (!synth) return;
+    stop();
+    const u = new SpeechSynthesisUtterance("Hello! If you can hear this, sound is working.");
+    u.lang = "en-US";
+    synth.speak(u);
+  });
+  $("nextS").addEventListener("click", () => { if (!book) return; const r = step(1); if (r) { highlight(r === "chapter"); restart(); } });
+  $("prevS").addEventListener("click", () => { if (!book) return; const r = step(-1); if (r) { highlight(r === "chapter"); restart(); } });
+  $("nextCh").addEventListener("click", () => book && goChapter(pos.c + 1));
+  $("prevCh").addEventListener("click", () => {
+    if (!book) return;
+    if (pos.p > 0 || pos.s > 0) goChapter(pos.c); else goChapter(pos.c - 1);
+  });
+  $("chapterSel").addEventListener("change", (e) => goChapter(+e.target.value));
+  $("reader").addEventListener("click", (e) => {
+    const sp = e.target.closest(".s"); if (!sp) return;
+    pos = { c: pos.c, p: +sp.dataset.p, s: +sp.dataset.s };
+    highlight();
+    playing ? restart() : play();
+  });
+  $("settingsBtn").addEventListener("click", () => {
+    const s = $("settings"); s.hidden = !s.hidden;
+    $("settingsBtn").setAttribute("aria-expanded", String(!s.hidden));
+  });
+  $("voiceSel").addEventListener("change", (e) => {
+    store.set("voice:" + langPrefix(book ? book.lang : ""), e.target.value);
+    restart();
+  });
+  const rateEl = $("rate");
+  rateEl.value = rate; $("rateOut").textContent = (+rate).toFixed(1) + "×";
+  rateEl.addEventListener("input", () => { rate = +rateEl.value; $("rateOut").textContent = rate.toFixed(1) + "×"; });
+  rateEl.addEventListener("change", () => { store.set("rate", rate); restart(); });
+
+  document.addEventListener("keydown", (e) => {
+    if (!book || e.target.closest("select, input, button")) return;
+    if (e.key === " ") { e.preventDefault(); toggle(); }
+    else if (e.key === "ArrowRight") { $("nextS").click(); }
+    else if (e.key === "ArrowLeft") { $("prevS").click(); }
+  });
+
+  /* ---------- keep last book on the device (IndexedDB) ---------- */
+  function idb() {
+    return new Promise((res, rej) => {
+      const r = indexedDB.open("epub-listener", 1);
+      r.onupgradeneeded = () => r.result.createObjectStore("files");
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    });
+  }
+  async function saveLastBook(file) {
+    try {
+      const db = await idb();
+      const buf = await file.arrayBuffer();
+      db.transaction("files", "readwrite").objectStore("files").put({ name: file.name, buf }, "last");
+    } catch {}
+  }
+  async function restoreLastBook() {
+    try {
+      const db = await idb();
+      const rec = await new Promise((res) => {
+        const q = db.transaction("files").objectStore("files").get("last");
+        q.onsuccess = () => res(q.result); q.onerror = () => res(null);
+      });
+      if (rec && rec.buf && !book) loadBook(await parseEpub(new File([rec.buf], rec.name)));
+    } catch {}
+  }
+  restoreLastBook();
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+  }
+
+  if (!synth) showVoiceHint("This browser can't speak text. Try Chrome, Edge or Safari.");
+  else populateVoices();
+  window.addEventListener("beforeunload", () => { if (synth) synth.cancel(); });
+})();
+</script>
+</body>
+</html>
